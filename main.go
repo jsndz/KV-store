@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sort"
 	"strconv"
 	"sync"
 	"time"
@@ -185,7 +186,76 @@ func (n *Node) HandlePut(w http.ResponseWriter, r *http.Request)  {
 }
 
 func (n *Node) HandleGet(w http.ResponseWriter, r *http.Request)  {
-	
+	//get key from param
+	key := r.URL.Query().Get("key")
+	if key =="" {
+		headerJSON(w, http.StatusInternalServerError, map[string]interface{}{"error": "No key ", })
+		return
+	}
+	//context
+	ctx ,done := context.WithTimeout(r.Context(),time.Second*10)
+	defer done()
+
+
+	//2chan
+	respChan := make(chan Value, n.N)
+	errChan := make(chan error, n.N)
+
+	//for go
+	for _,p := range n.peers{
+		peer := p
+		go func(peer string ) {
+			reqctx, done := context.WithTimeout(ctx,time.Second * 10)
+			defer done()
+            url := fmt.Sprintf("http://%s/internal/read?key=%s", peer, key)
+			httpReq,_ := http.NewRequestWithContext(reqctx,http.MethodGet,url,nil)
+			resp,err := n.client.Do(httpReq)
+			if err != nil {
+				errChan <- err
+				return
+			}
+
+			defer resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				var v Value
+				if err :=json.NewDecoder(resp.Body).Decode(&v); err != nil {
+					errChan <- err
+					return 
+				}
+				respChan <- v
+				return
+			}
+			errChan <- fmt.Errorf("status %d", resp.StatusCode)
+
+		}(peer)
+	}
+
+	//needed
+	needed := n.R
+	values := make([]Value,0,n.N)
+	received := 0
+
+	for received < n.N && len(values)< needed{
+		select{
+		case v:= <- respChan:
+			values = append(values, v)
+			received++
+		case <-errChan:
+			received++
+		case <-ctx.Done():
+			received = n.N
+
+		}
+	}
+
+	if len(values) == 0 {
+		headerJSON(w, http.StatusNotFound, map[string]string{"error": "no value found"})
+        return
+	}
+
+	sort.Slice(values,func(i, j int) bool {return values[i].TS > values[j].TS})
+	best := values[0]
+    headerJSON(w, http.StatusOK, best)
 }
 
 func (n *Node) HandleInternalWrite(w http.ResponseWriter, r *http.Request){
