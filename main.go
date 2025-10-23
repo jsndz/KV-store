@@ -4,11 +4,15 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
+	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 )
@@ -259,5 +263,66 @@ func (n *Node) HandleGet(w http.ResponseWriter, r *http.Request)  {
 }
 
 func (n *Node) HandleInternalWrite(w http.ResponseWriter, r *http.Request){
+	var req struct{
+		key string `json:"key"`
+		val string 	`json:"value"`
+		TS int64   `json:"TS"`
+	}
 
+	if r.Method != http.MethodPost {
+		headerJSON(w, http.StatusNotFound, map[string]string{"error": "no value found"})
+		return
+	}
+	
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil{
+		headerJSON(w, http.StatusNotFound, map[string]string{"error": "no value found"})
+		return 
+	}
+
+	n.store.Put(req.key, Value{Value: req.val, TS: req.TS})
+    headerJSON(w, http.StatusOK, map[string]string{"result": "ok"})
+}
+
+func (n *Node) HandleInternalRead(w http.ResponseWriter, r *http.Request) {
+    key := r.URL.Query().Get("key")
+    if key == "" {
+        headerJSON(w, http.StatusBadRequest, map[string]string{"error": "missing key"})
+        return
+    }
+    if v, ok := n.store.Get(key); ok {
+        headerJSON(w, http.StatusOK, v)
+        return
+    }
+    headerJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+}
+
+
+func main()  {
+	id := flag.String("id", "node", "node id")
+    addr := flag.String("addr", "localhost:8001", "address to listen on")
+    peersFlag := flag.String("peers", "localhost:8001", "comma-separated list of peer addresses (including self)")
+    flag.Parse()
+    peers := strings.Split(*peersFlag, ",")
+
+    // basic validation
+    if len(peers) == 0 {
+        fmt.Println("peers required")
+        os.Exit(1)
+    }
+
+    n := NewNode(*id, *addr, peers)
+
+
+	mux := http.NewServeMux()
+
+	mux.HandleFunc("/put",n.HandlePut)
+	    mux.HandleFunc("/get", n.HandleGet)
+    mux.HandleFunc("/internal/write", n.HandleInternalWrite)
+    mux.HandleFunc("/internal/read", n.HandleInternalRead)
+
+	srv := &http.Server{Addr:*addr, Handler:mux}
+	log.Printf("node %s starting at %s; peers=%v; N=%d W=%d R=%d", n.id, *addr, peers, n.N, n.W, n.R)
+    if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+        log.Fatalf("server failed: %v", err)
+    }
 }
