@@ -1,114 +1,88 @@
-Building a Key value store based on quorum system
+\
 
-It should have a store where i can store key and values
+# Go Quorum Key-Value Store
 
-## Build a Store object
+A **distributed key-value store** in Go using a **quorum-based replication model**. Supports concurrent reads and writes across multiple nodes with configurable read (`R`) and write (`W`) quorum sizes.
 
-```go
+---
 
-type Value struct{
-	Value string `json:"value"`
-	TS int64 `json:"timestamp"`// timestamp for Lamport-style
-}
+## Features
 
+- **Quorum Writes & Reads** – Ensures strong consistency using W/N and R/N quorum settings.
+- **Vector Timestamps** – Uses strictly increasing timestamps for last-write-wins conflict resolution.
+- **HTTP API** – Simple REST endpoints for external reads/writes and internal node replication.
+- **Concurrent Safe** – Thread-safe in-memory store with Go `sync.RWMutex`.
+- **Peer-to-Peer Replication** – Writes are propagated to all configured peers.
 
-type Store struct{
-	mu sync.RWMutex
-	m map[string]Value
-}
+---
 
+## Endpoints
+
+| Method | Path                       | Description                                                           |
+| ------ | -------------------------- | --------------------------------------------------------------------- |
+| `POST` | `/put`                     | Write a key-value pair. JSON body: `{ "key": "foo", "value": "bar" }` |
+| `GET`  | `/get?key=<key>`           | Read a key’s value from the cluster                                   |
+| `POST` | `/internal/write`          | Internal endpoint used for replication between nodes                  |
+| `GET`  | `/internal/read?key=<key>` | Internal endpoint to fetch a value from a node                        |
+
+---
+
+## Installation & Run
+
+1. Clone repository:
+
+```bash
+git clone https://github.com/jsndz/KV-store.git
+cd KV-store
 ```
 
-```go
-func NewStore() *Store {
-	return &Store{
-		m:make(map[string]Value),
-	}
-}
+2. Build:
 
-// RLock is used to allow multiple goroutines to read from the store concurrently without blocking each other, while still preventing reads from happening during a write.
-
-func (s *Store)Get(key string)(Value,bool){
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	v,ok:= s.m[key]
-	return v,ok
-}
-
-
-func (s *Store)Put(key string,value Value){
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	curr,ok := s.m[key]
-	if !ok || curr.TS <= value.TS{
-		s.m[key] = value
-	}
-}
-
-
+```bash
+go build -o kvstore main.go
 ```
 
-```go
+3. Run nodes (example with 3 nodes):
 
-type Node struct{
-	id string
-	addr string
-	httpAddr string
-	store *Store
-	client *http.Client
-	peers []string
+```bash
+# Node 1
+./kvstore -id=node1 -addr=localhost:8001 -peers=localhost:8001,localhost:8002,localhost:8003
 
-	ts int64
-	mu sync.Mutex
+# Node 2
+./kvstore -id=node2 -addr=localhost:8002 -peers=localhost:8001,localhost:8002,localhost:8003
 
-	N int
-	W int
-	R int
-}
-
-
-func NewNode(id,addr string , peers []string) *Node {
-	N := len(peers)
-	q := N /2 +1
-	return &Node{
-		id:id,
-		addr: addr,
-		store: NewStore(),
-		client: &http.Client{Timeout: 2*time.Second},
-		peers: peers,
-
-		ts: time.Now().UnixNano(),
-		N: N,
-		W:q,
-		R:q,
-	}
-}
-
-
+# Node 3
+./kvstore -id=node3 -addr=localhost:8003 -peers=localhost:8001,localhost:8002,localhost:8003
 ```
 
-Why N/2 + 1?
+---
 
-In quorum-based systems (like Dynamo, Cassandra, or Raft-style reads/writes):
+## Example Usage
 
-Write quorum (W): the minimum number of nodes that must acknowledge a write.
+Write a key:
 
-Read quorum (R): the minimum number of nodes that must respond to a read.
+```bash
+curl -X POST http://localhost:8001/put -d '{"key":"foo","value":"bar"}' -H "Content-Type: application/json"
+```
 
-Setting W = R = N/2 + 1 ensures:
+Read a key:
 
-Majority intersection: Any read quorum and write quorum will always overlap on at least one node.
+```bash
+curl http://localhost:8002/get?key=foo
+```
 
-This guarantees strong consistency, because a read will always see the latest write.
+---
 
-Formally:
+## Notes
 
-R+W>N
-R+W>N
+- Currently **in-memory** only; restart will lose data.
+- Configurable quorum based on the number of peers: `W = N/2 + 1`, `R = N/2 + 1`.
+- Can handle **partial node failures** as long as quorum requirements are met.
 
-Here, R = W = N/2 + 1:
+---
 
-(N/2+1)+(N/2+1)=N+2>N
-(N/2+1)+(N/2+1)=N+2>N
+## License
 
-So reads and writes will always intersect at at least one node, ensuring the latest value is observed.
+MIT License.
+
+---

@@ -88,15 +88,17 @@ func NewNode(id,addr string , peers []string) *Node {
 	}
 }
 
-func (n *Node) nextTs()int64{
+func (n *Node) nextTs() int64 {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	if n.ts+1 > time.Now().UnixNano() {
-		return n.ts+1 
+	now := time.Now().UnixNano()
+	if n.ts+1 > now {
+		n.ts = n.ts + 1
+	} else {
+		n.ts = now
 	}
-	return time.Now().UnixNano()
+	return n.ts
 }
-
 
 func headerJSON(w http.ResponseWriter, code int, v interface{}) {
     w.Header().Set("Content-Type", "application/json")
@@ -263,10 +265,10 @@ func (n *Node) HandleGet(w http.ResponseWriter, r *http.Request)  {
 }
 
 func (n *Node) HandleInternalWrite(w http.ResponseWriter, r *http.Request){
-	var req struct{
-		key string `json:"key"`
-		val string 	`json:"value"`
-		TS int64   `json:"TS"`
+		var req struct {
+		Key   string `json:"key"`
+		Value string `json:"value"`
+		TS    int64  `json:"ts"`
 	}
 
 	if r.Method != http.MethodPost {
@@ -279,7 +281,7 @@ func (n *Node) HandleInternalWrite(w http.ResponseWriter, r *http.Request){
 		return 
 	}
 
-	n.store.Put(req.key, Value{Value: req.val, TS: req.TS})
+	n.store.Put(req.Key, Value{Value: req.Value, TS: req.TS})
     headerJSON(w, http.StatusOK, map[string]string{"result": "ok"})
 }
 
